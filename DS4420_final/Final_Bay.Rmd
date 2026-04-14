@@ -1,0 +1,148 @@
+---
+title: "Final_Project"
+author: "Dhillon"
+date: "2026-04-12"
+output: html_document
+---
+
+```{r}
+library(readr)
+
+data <- read_csv("savant_data.csv")
+
+head(data)
+```
+
+```{r}
+library(dplyr)
+
+data <- data %>%
+  mutate(hit = ifelse(events %in% c("single","double","triple","home_run"), 1, 0))
+
+# Check it worked
+table(data$hit)
+```
+
+```{r}
+data_model <- data %>%
+  select(
+    hit,
+    release_speed,
+    plate_x,
+    plate_z,
+    balls,
+    strikes,
+    pitch_type,
+    stand,
+    p_throws,
+    launch_speed,
+    launch_angle
+  ) %>%
+  na.omit()
+```
+
+```{r}
+data_model$pitch_type <- as.numeric(as.factor(data_model$pitch_type))
+data_model$stand <- ifelse(data_model$stand == "R", 1, 0)
+data_model$p_throws <- ifelse(data_model$p_throws == "R", 1, 0)
+
+str(data_model)
+```
+
+```{r}
+set.seed(42)
+
+train_index <- sample(1:nrow(data_model), 0.8 * nrow(data_model))
+
+train <- data_model[train_index, ]
+test <- data_model[-train_index, ]
+
+dim(train)
+dim(test)
+```
+
+```{r}
+sigmoid <- function(z) {
+  1 / (1 + exp(-z))
+}
+```
+
+```{r}
+train_model <- function(X, y, lr = 0.001, epochs = 500, lambda = 0.01) {
+  w <- rep(0, ncol(X))
+  
+  for (i in 1:epochs) {
+    z <- X %*% w
+    p <- sigmoid(z)
+    
+    grad <- t(X) %*% (p - y) / length(y)
+    grad[-1] <- grad[-1] + 2 * lambda * w[-1]
+    
+    w <- w - lr * grad
+  }
+  
+  return(w)
+}
+```
+
+```{r}
+X_train <- as.matrix(train[, -1])
+y_train <- train$hit
+X_train <- cbind(1, X_train)
+
+w <- train_model(X_train, y_train)
+
+w
+```
+
+```{r}
+X_test <- as.matrix(test[, -1])
+X_test <- cbind(1, X_test)
+
+y_test <- test$hit
+
+probs <- sigmoid(X_test %*% w)
+preds <- ifelse(probs > 0.1, 1, 0)
+
+accuracy <- mean(preds == y_test)
+accuracy
+```
+```{r}
+table(y_test)
+table(preds)
+table(Predicted = preds, Actual = y_test)
+mean(y_test)
+mean(preds == 0)
+```
+```{r}
+# USER INPUT 
+mean_launch_speed <- mean(data_model$launch_speed)
+mean_launch_angle <- mean(data_model$launch_angle)
+#If needed to test at an average speed and angle
+new_input <- data.frame(
+  release_speed = 99,
+  plate_x = 0,
+  plate_z = 2.5,
+  balls = 0,
+  strikes = 1,
+  pitch_type = as.numeric(as.factor("FF")),  # example pitch type
+  #"CH" "CS" "CU" "FA" "FC" "FF" "FS" "KC" "KN" "PO" "SI" "SL" "ST" "SV"
+  stand = 1,      # 1 = Right-handed batter
+  p_throws = 0,   # 0 = Left-handed pitcher
+  launch_speed = 95,
+  launch_angle = 15
+)
+
+X_new <- as.matrix(new_input)
+X_new <- cbind(1, X_new)
+prob_hit <- sigmoid(X_new %*% w)
+# Classification theshold
+pred_hit <- ifelse(prob_hit > 0.2, 1, 0)
+
+cat("Probability of hit is:", round(prob_hit, 4), "\n")
+
+if (pred_hit == 1) {
+  cat("Prediction: HIT\n")
+} else {
+  cat("Prediction: NO HIT\n")}
+```
