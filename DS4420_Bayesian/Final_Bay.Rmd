@@ -1,0 +1,130 @@
+---
+title: "Bayesian Modeling of Hit Probability by Pitch Location"
+author: "Dhillon"
+date: "2026-04-12"
+output: pdf_document
+---
+
+This project uses a Beta-Binomial Bayesian model with a conjugate Beta prior to estimate posterior hit probability in each strike-zone cell. The Goal is to determine where the pitcher should throw the ball for the least amount of hits.
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+
+data <- read_csv("savant_data.csv")
+
+data <- data %>%
+  mutate(hit = ifelse(events %in% c("single", "double", "triple", "home_run"), 1, 0))
+
+data_zone <- data %>%
+  select(plate_x, plate_z, hit) %>%
+  na.omit()
+
+data_zone <- data_zone %>%
+  filter(plate_x >= -0.83, plate_x <= 0.83,
+         plate_z >= 1.50, plate_z <= 3.50)
+
+x_breaks <- seq(-0.83, 0.83, by = 0.15)
+z_breaks <- seq(1.50, 3.50, by = 0.15)
+
+data_zone <- data_zone %>%
+  mutate(
+    x_bin = cut(plate_x, breaks = x_breaks, include.lowest = TRUE, right = FALSE),
+    z_bin = cut(plate_z, breaks = z_breaks, include.lowest = TRUE, right = FALSE)
+  )
+alpha_prior <- 2
+beta_prior  <- 8
+
+zone_summary <- data_zone %>%
+  group_by(x_bin, z_bin) %>%
+  summarise(
+    n_pitches = n(),
+    hits = sum(hit),
+    misses = n_pitches - hits,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    post_alpha = alpha_prior + hits,
+    post_beta  = beta_prior + misses,
+    posterior_mean = post_alpha / (post_alpha + post_beta),
+    posterior_lower = qbeta(0.025, post_alpha, post_beta),
+    posterior_upper = qbeta(0.975, post_alpha, post_beta)
+  )
+
+get_midpoint <- function(bin_label) {
+  nums <- gsub("\\[|\\)|\\]|\\(", "", bin_label)
+  parts <- strsplit(nums, ",")[[1]]
+  mean(as.numeric(parts))
+}
+
+zone_summary <- zone_summary %>%
+  rowwise() %>%
+  mutate(
+    x_mid = get_midpoint(x_bin),
+    z_mid = get_midpoint(z_bin)
+  ) %>%
+  ungroup()
+
+best_zone <- zone_summary %>%
+  filter(n_pitches >= 10) %>%
+  arrange(posterior_mean) %>%
+  slice(1)
+
+cat("Best pitch location:\n")
+cat("plate_x =", round(best_zone$x_mid, 3), "\n")
+cat("plate_z =", round(best_zone$z_mid, 3), "\n")
+cat("Posterior mean hit probability =", round(best_zone$posterior_mean, 4), "\n")
+cat("95% credible interval = [",
+    round(best_zone$posterior_lower, 4), ", ",
+    round(best_zone$posterior_upper, 4), "]\n", sep = "")
+
+strike_zone <- data.frame(
+  xmin = -0.83,
+  xmax =  0.83,
+  ymin =  1.50,
+  ymax =  3.50
+)
+
+ggplot(zone_summary, aes(x = x_mid, y = z_mid, fill = posterior_mean)) +
+  geom_tile(color = "white") +
+  geom_rect(
+    data = strike_zone,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = NA,
+    color = "black",
+    linewidth = 1.2
+  ) +
+  geom_point(
+    data = best_zone,
+    aes(x = x_mid, y = z_mid),
+    inherit.aes = FALSE,
+    color = "red",
+    size = 4
+  ) +
+  scale_fill_gradient(
+    low = "blue",
+    high = "darkred",
+    labels = function(x) paste0(round(100 * x, 1), "%"),
+    name = "Posterior\nhit probability"
+  ) +
+  labs(
+    title = "Bayesian Heatmap of Hit Probability",
+    subtitle = "Beta-Binomial model with Beta(2, 8) prior",
+    x = "Horizontal pitch location",
+    y = "Vertical pitch location"
+  ) +
+  coord_fixed() +
+  theme_minimal(base_size = 13)
+
+zone_summary %>%
+  filter(n_pitches >= 10) %>%
+  arrange(posterior_mean) %>%
+  select(x_mid, z_mid, n_pitches, hits, posterior_mean, posterior_lower, posterior_upper) %>%
+  head(10)
+zone_summary <- zone_summary %>%
+  mutate(observed_rate = hits / n_pitches)
+
+mean(abs(zone_summary$posterior_mean - zone_summary$observed_rate))
+```
